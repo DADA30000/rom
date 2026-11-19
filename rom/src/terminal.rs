@@ -25,6 +25,16 @@ const MAX_PENDING_BYTES: usize = 64 * 1024;
 const PARTIAL_LINE_GRACE: f64 = 0.5;
 const FRAME_INTERVAL: Duration = Duration::from_micros(33_333);
 
+/// Terminal live-rendering admission status (compatibility shim for `rom 0.5`
+/// embedders such as `nh 4.5.0`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Admission {
+  /// Standard error can host live redraws.
+  Live,
+  /// Append-only fallback.
+  Append,
+}
+
 /// Returns whether standard error can host live redraws.
 ///
 /// Like nix-output-monitor, ROM sends synchronized-update markers without a
@@ -34,6 +44,16 @@ const FRAME_INTERVAL: Duration = Duration::from_micros(33_333);
 #[must_use]
 pub fn is_live() -> bool {
   io::stderr().is_terminal()
+}
+
+/// Compatibility wrapper around [`is_live`] for embedders targeting `rom 0.5`.
+#[must_use]
+pub fn admission() -> Admission {
+  if is_live() {
+    Admission::Live
+  } else {
+    Admission::Append
+  }
 }
 
 /// Counts the newlines in `bytes`.

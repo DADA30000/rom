@@ -3,6 +3,7 @@
 
 pub mod cache;
 #[cfg(feature = "cli")] pub mod cli;
+mod config_file;
 pub mod curl;
 pub mod display;
 pub mod error;

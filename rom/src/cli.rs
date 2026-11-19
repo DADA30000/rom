@@ -469,11 +469,11 @@ pub fn run() -> misstep::Result<ExitCode> {
       } else {
         InputMode::Auto
       },
-      ..EngineConfig::default()
+      ..EngineConfig::plain_default()
     },
     render: RenderConfig {
       ansi: io::stderr().is_terminal(),
-      ..RenderConfig::default()
+      ..RenderConfig::plain_default()
     },
   };
   cli.display.apply(&mut monitor);

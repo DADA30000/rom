@@ -257,8 +257,10 @@ pub struct RenderConfig {
   pub icons:            IconMode,
 }
 
-impl Default for EngineConfig {
-  fn default() -> Self {
+impl EngineConfig {
+  /// Built-in engine defaults without reading `config.toml`.
+  #[must_use]
+  pub const fn plain_default() -> Self {
     Self {
       silent:           false,
       verbosity:        Verbosity::Info,
@@ -271,8 +273,10 @@ impl Default for EngineConfig {
   }
 }
 
-impl Default for RenderConfig {
-  fn default() -> Self {
+impl RenderConfig {
+  /// Built-in renderer defaults without reading `config.toml`.
+  #[must_use]
+  pub fn plain_default() -> Self {
     Self {
       ansi:             false,
       show_timers:      true,
@@ -293,15 +297,46 @@ impl Default for RenderConfig {
   }
 }
 
+impl Default for EngineConfig {
+  fn default() -> Self {
+    Config::default().engine
+  }
+}
+
+impl Default for RenderConfig {
+  fn default() -> Self {
+    Config::default().render
+  }
+}
+
 /// Complete adapter configuration.
 ///
 /// The engine and renderer retain only their respective halves.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub struct Config {
   /// Engine half.
   pub engine: EngineConfig,
   /// Renderer half.
   pub render: RenderConfig,
+}
+
+impl Config {
+  /// Built-in defaults without reading `config.toml`.
+  #[must_use]
+  pub fn plain_default() -> Self {
+    Self {
+      engine: EngineConfig::plain_default(),
+      render: RenderConfig::plain_default(),
+    }
+  }
+}
+
+impl Default for Config {
+  fn default() -> Self {
+    let mut config = Self::plain_default();
+    crate::config_file::apply_user_config(&mut config);
+    config
+  }
 }
 
 /// A decoded logical log line.
