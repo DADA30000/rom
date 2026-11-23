@@ -243,7 +243,7 @@ fn planned_download_moves_through_running_and_completed_counts() {
 }
 
 #[test]
-fn download_uses_file_transfer_wire_size_and_ignores_unpacked_parent() {
+fn download_prefers_file_transfer_wire_size_over_unpacked_parent() {
   const PATH: &str = "/nix/store/dddddddddddddddddddddddddddddddd-download";
   let mut engine = Engine::new(EngineConfig::default());
   for record in [
@@ -257,6 +257,7 @@ fn download_uses_file_transfer_wire_size_and_ignores_unpacked_parent() {
   ] {
     engine.process_record_at(record.as_bytes(), 0.0).unwrap();
   }
+  // Before FileTransfer reports, falls back to parent progress.
   let transfer = engine
     .state()
     .summary()
@@ -264,13 +265,21 @@ fn download_uses_file_transfer_wire_size_and_ignores_unpacked_parent() {
     .values()
     .next()
     .unwrap();
-  assert_eq!(transfer.bytes_transferred, 0);
-  assert_eq!(transfer.total_bytes, None);
+  assert_eq!(transfer.bytes_transferred, 197_132_288);
+  assert_eq!(transfer.total_bytes, Some(1_073_741_824));
 
+  // Once FileTransfer reports wire bytes, it replaces and locks out unpacked
+  // parent progress.
   engine
     .process_record_at(
       br#"@nix {"action":"result","id":21,"type":105,"fields":[58720256,327155712,1,0]}"#,
       1.0,
+    )
+    .unwrap();
+  engine
+    .process_record_at(
+      br#"@nix {"action":"result","id":20,"type":105,"fields":[300000000,1073741824,1,0]}"#,
+      2.0,
     )
     .unwrap();
   let transfer = engine

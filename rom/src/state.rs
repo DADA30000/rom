@@ -369,23 +369,24 @@ pub struct BuildReport {
 /// Main state for ROM.
 #[derive(Debug, Clone)]
 pub struct State {
-  derivation_infos:   IndexMap<DerivationId, DerivationInfo, RandomState>,
-  store_path_infos:   IndexMap<StorePathId, StorePathInfo, RandomState>,
-  full_summary:       DependencySummary,
-  forest_roots:       Vec<DerivationId>,
-  build_cache:        BTreeMap<(String, String), Vec<BuildReport>>,
-  start_time:         f64,
-  progress:           ProgressState,
-  store_path_ids:     HashMap<StorePath, StorePathId>,
-  derivation_ids:     HashMap<Derivation, DerivationId>,
-  name_counts:        HashMap<String, usize>,
-  activities:         HashMap<ActivityId, ActivityStatus>,
-  source_fetches:     BTreeMap<ActivityId, SourceFetch>,
-  nix_errors:         Vec<String>,
-  nix_error_count:    usize,
-  machine_cpu:        Option<f32>,
-  next_store_path_id: StorePathId,
-  next_derivation_id: DerivationId,
+  derivation_infos:        IndexMap<DerivationId, DerivationInfo, RandomState>,
+  store_path_infos:        IndexMap<StorePathId, StorePathInfo, RandomState>,
+  full_summary:            DependencySummary,
+  forest_roots:            Vec<DerivationId>,
+  build_cache:             BTreeMap<(String, String), Vec<BuildReport>>,
+  start_time:              f64,
+  progress:                ProgressState,
+  store_path_ids:          HashMap<StorePath, StorePathId>,
+  derivation_ids:          HashMap<Derivation, DerivationId>,
+  name_counts:             HashMap<String, usize>,
+  activities:              HashMap<ActivityId, ActivityStatus>,
+  file_transfer_downloads: HashSet<StorePathId>,
+  source_fetches:          BTreeMap<ActivityId, SourceFetch>,
+  nix_errors:              Vec<String>,
+  nix_error_count:         usize,
+  machine_cpu:             Option<f32>,
+  next_store_path_id:      StorePathId,
+  next_derivation_id:      DerivationId,
 }
 
 impl Default for State {
@@ -399,23 +400,24 @@ impl State {
   #[must_use]
   pub fn new() -> Self {
     Self {
-      derivation_infos:   IndexMap::default(),
-      store_path_infos:   IndexMap::default(),
-      full_summary:       DependencySummary::default(),
-      forest_roots:       Vec::new(),
-      build_cache:        BTreeMap::new(),
-      start_time:         current_time(),
-      progress:           ProgressState::JustStarted,
-      store_path_ids:     HashMap::new(),
-      derivation_ids:     HashMap::new(),
-      name_counts:        HashMap::new(),
-      activities:         HashMap::new(),
-      source_fetches:     BTreeMap::new(),
-      nix_errors:         Vec::new(),
-      nix_error_count:    0,
-      machine_cpu:        None,
-      next_store_path_id: 0,
-      next_derivation_id: 0,
+      derivation_infos:        IndexMap::default(),
+      store_path_infos:        IndexMap::default(),
+      full_summary:            DependencySummary::default(),
+      forest_roots:            Vec::new(),
+      build_cache:             BTreeMap::new(),
+      start_time:              current_time(),
+      progress:                ProgressState::JustStarted,
+      store_path_ids:          HashMap::new(),
+      derivation_ids:          HashMap::new(),
+      name_counts:             HashMap::new(),
+      activities:              HashMap::new(),
+      file_transfer_downloads: HashSet::new(),
+      source_fetches:          BTreeMap::new(),
+      nix_errors:              Vec::new(),
+      nix_error_count:         0,
+      machine_cpu:             None,
+      next_store_path_id:      0,
+      next_derivation_id:      0,
     }
   }
 
@@ -1204,6 +1206,8 @@ impl State {
       transfer.bytes_transferred = existing.bytes_transferred;
       transfer.total_bytes = existing.total_bytes;
       transfer.last_progress = existing.last_progress;
+    } else {
+      self.file_transfer_downloads.remove(&id);
     }
     self.full_summary.running_downloads.insert(id, transfer);
     id
@@ -1229,6 +1233,7 @@ impl State {
     else {
       return false;
     };
+    self.file_transfer_downloads.remove(&path);
     self
       .full_summary
       .completed_downloads
@@ -1461,19 +1466,22 @@ impl State {
     }
     let Progress { done, expected, .. } = progress;
 
-    // Downloads only track actual wire bytes from FileTransfer activities;
-    // CopyPath / Substitute progress reports unpacked NAR sizes and must not be
-    // counted as download size.
+    // Prefer FileTransfer wire bytes over CopyPath / Substitute unpacked NAR
+    // sizes for downloads. Once a download receives FileTransfer progress,
+    // later unpacked progress ticks on its parent are ignored.
     if activity == Activities::FileTransfer {
       if let Some(path) = self.enclosing_transfer_path(id)
         && let Some(transfer) =
           self.full_summary.running_downloads.get_mut(&path)
       {
-        if transfer.bytes_transferred != done {
+        let first_wire = self.file_transfer_downloads.insert(path);
+        if first_wire || transfer.bytes_transferred != done {
           transfer.last_progress = now;
         }
         transfer.bytes_transferred = done;
-        if expected > 0 {
+        if first_wire {
+          transfer.total_bytes = (expected > 0).then_some(expected);
+        } else if expected > 0 {
           transfer.total_bytes = Some(
             transfer
               .total_bytes
@@ -1484,15 +1492,20 @@ impl State {
       return true;
     }
 
-    // Refresh stall tracking for downloads that only emit unpacked progress,
-    // without recording unpacked sizes.
-    if done > 0
-      && let Some(path) = self.enclosing_transfer_path(id)
-      && let Some(transfer) = self.full_summary.running_downloads.get_mut(&path)
-      && transfer.total_bytes.is_none()
-      && transfer.bytes_transferred == 0
+    for (&path, transfer) in self
+      .full_summary
+      .running_downloads
+      .iter_mut()
+      .filter(|(_, transfer)| transfer.activity_id == id)
     {
-      transfer.last_progress = now;
+      if self.file_transfer_downloads.contains(&path) {
+        continue;
+      }
+      if transfer.bytes_transferred != done {
+        transfer.last_progress = now;
+      }
+      transfer.bytes_transferred = done;
+      transfer.total_bytes = (expected > 0).then_some(expected);
     }
 
     for transfer in self

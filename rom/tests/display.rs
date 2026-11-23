@@ -581,16 +581,20 @@ fn progress_bars_percentages_and_decimal_bytes_toggle_independently() {
 }
 
 #[test]
-fn unpacked_only_download_is_not_counted_and_shows_unknown_size() {
+fn download_prefers_file_transfer_wire_bytes_and_falls_back_to_copy_path() {
   let mut engine = Engine::new(EngineConfig::default());
   for record in [
-    // Host 1: only unpacked CopyPath progress (must NOT be counted).
-    r#"@nix {"action":"start","id":10,"level":3,"parent":0,"text":"copying","type":108,"fields":["/nix/store/bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb-unpacked-only","https://cache.nixos.org"]}"#,
-    r#"@nix {"action":"result","id":10,"type":105,"fields":[104857600,209715200,1,0]}"#,
-    // Host 2: real FileTransfer wire progress (10 MiB / 50 MiB).
-    r#"@nix {"action":"start","id":20,"level":3,"parent":0,"text":"copying","type":108,"fields":["/nix/store/cccccccccccccccccccccccccccccccc-wire-sized","https://nix-community.cachix.org"]}"#,
+    // Host 1: CopyPath only (e.g. ssh copy without FileTransfer) -> falls
+    // back.
+    r#"@nix {"action":"start","id":10,"level":3,"parent":0,"text":"copying","type":108,"fields":["/nix/store/bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb-ssh-copy","ssh://builder.example"]}"#,
+    r#"@nix {"action":"result","id":10,"type":105,"fields":[10485760,20971520,1,0]}"#,
+    // Host 2: CopyPath (200 MiB unpacked) + child FileTransfer (50 MiB wire)
+    // -> prefers wire size (10 MiB / 50 MiB).
+    r#"@nix {"action":"start","id":20,"level":3,"parent":0,"text":"copying","type":108,"fields":["/nix/store/cccccccccccccccccccccccccccccccc-wire-sized","https://cache.nixos.org"]}"#,
     r#"@nix {"action":"start","id":21,"level":3,"parent":20,"text":"downloading","type":101,"fields":[]}"#,
+    r#"@nix {"action":"result","id":20,"type":105,"fields":[104857600,209715200,1,0]}"#,
     r#"@nix {"action":"result","id":21,"type":105,"fields":[10485760,52428800,1,0]}"#,
+    r#"@nix {"action":"result","id":20,"type":105,"fields":[157286400,209715200,1,0]}"#,
   ] {
     engine.process_record_at(record.as_bytes(), 0.0).unwrap();
   }
@@ -612,12 +616,12 @@ fn unpacked_only_download_is_not_counted_and_shows_unknown_size() {
   )
   .text();
 
-  assert!(text.contains("? MiB/? MiB"), "{text}");
+  assert!(text.contains("10.0 MiB/20.0 MiB"), "{text}");
+  assert!(text.contains("10.0 MiB/50.0 MiB"), "{text}");
   assert!(!text.contains("200.0 MiB"), "{text}");
-  assert!(!text.contains("100.0 MiB"), "{text}");
   let totals = text
     .lines()
     .find(|line| line.starts_with("┗━ ∑"))
     .expect("missing nom totals row");
-  assert!(totals.contains("10.0 MiB/50.0 MiB"), "{totals}");
+  assert!(totals.contains("20.0 MiB/70.0 MiB"), "{totals}");
 }
