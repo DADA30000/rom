@@ -670,6 +670,11 @@ impl Renderer<'_> {
           ),
           theme.completed,
         ));
+      } else if host.running_downloads > 0 || host.completed_downloads > 0 {
+        row.push(NomCell::right(
+          format!("{}{}? MiB/? MiB", icons.download, icons.gap),
+          theme.completed,
+        ));
       } else {
         row.push(NomCell::empty());
       }
@@ -774,6 +779,13 @@ impl Renderer<'_> {
             self.bytes(0),
             self.bytes(planned),
           ),
+          theme.completed,
+        ));
+      } else if aggregated.total_running_downloads > 0
+        || aggregated.total_completed_downloads > 0
+      {
+        row.push(NomCell::right(
+          format!("{}{}? MiB/? MiB", icons.download, icons.gap),
           theme.completed,
         ));
       } else {

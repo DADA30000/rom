@@ -93,6 +93,7 @@ fn plan(engine: &mut Engine, path: &str) {
 }
 
 fn download(engine: &mut Engine, path: &str, id: u64, parent: u64) {
+  let transfer_id = id + 10_000;
   feed(
     engine,
     &json!({"action":"start", "id":id, "parent":parent, "level":3,
@@ -101,7 +102,13 @@ fn download(engine: &mut Engine, path: &str, id: u64, parent: u64) {
   );
   feed(
     engine,
-    &json!({"action":"result", "id":id, "type":105, "fields":[50, 100, 1, 0]}),
+    &json!({"action":"start", "id":transfer_id, "parent":id, "level":3,
+    "text":"downloading", "type":101, "fields":[]}),
+    1.05,
+  );
+  feed(
+    engine,
+    &json!({"action":"result", "id":transfer_id, "type":105, "fields":[50, 100, 1, 0]}),
     1.1,
   );
 }

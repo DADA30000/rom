@@ -1828,10 +1828,19 @@ impl Renderer<'_> {
         theme.failed,
       ));
     }
-    let bytes = total.map_or_else(
-      || self.bytes(transfer.done),
-      |total| format!("{}/{}", self.bytes(transfer.done), self.bytes(total)),
-    );
+    let bytes = match total {
+      Some(total) => {
+        format!("{}/{}", self.bytes(transfer.done), self.bytes(total))
+      },
+      None if transfer.direction == Direction::Download => {
+        if transfer.done > 0 {
+          format!("{}/? MiB", self.bytes(transfer.done))
+        } else {
+          "? MiB/? MiB".to_owned()
+        }
+      },
+      None => self.bytes(transfer.done),
+    };
     status.push(span(format!("  {bytes}"), theme.transfer_bytes));
     if transfer.unsized_count > 0 {
       status.push(span(
@@ -1875,10 +1884,19 @@ impl Renderer<'_> {
       .total
       .filter(|total| *total > 0)
       .map(|total| (transfer.done.saturating_mul(100) / total).min(100));
-    let bytes = transfer.total.map_or_else(
-      || self.bytes(transfer.done),
-      |total| format!("{}/{}", self.bytes(transfer.done), self.bytes(total)),
-    );
+    let bytes = match transfer.total.filter(|total| *total > 0) {
+      Some(total) => {
+        format!("{}/{}", self.bytes(transfer.done), self.bytes(total))
+      },
+      None if transfer.direction == Direction::Download => {
+        if transfer.done > 0 {
+          format!("{}/? MiB", self.bytes(transfer.done))
+        } else {
+          "? MiB/? MiB".to_owned()
+        }
+      },
+      None => self.bytes(transfer.done),
+    };
     let duration = format_duration(elapsed(transfer.start, self.now));
     let show_percent =
       self.config.show_percentages.then_some(percent).flatten();

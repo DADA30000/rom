@@ -406,7 +406,7 @@ impl<'a> RenderSnapshot<'a> {
         direction,
         name: info.name.name.clone(),
         done: transfer.total_bytes,
-        total: Some(transfer.total_bytes),
+        total: (transfer.total_bytes > 0).then_some(transfer.total_bytes),
         unsized_count: 0,
         start: transfer.start,
         host: transfer.host.name().to_owned(),

@@ -375,7 +375,8 @@ fn parse_planned_download_bytes(message: &str) -> Option<u64> {
     "TiB" => 1024.0_f64 * 1024.0 * 1024.0 * 1024.0,
     _ => return None,
   };
-  Some((number * multiplier).round() as u64)
+  let bytes = (number * multiplier).round() as u64;
+  (bytes > 0).then_some(bytes)
 }
 
 fn parse_host(value: &str) -> (Host, Option<String>) {

@@ -243,7 +243,7 @@ fn planned_download_moves_through_running_and_completed_counts() {
 }
 
 #[test]
-fn descendant_progress_does_not_overwrite_its_transfer_parent() {
+fn download_uses_file_transfer_wire_size_and_ignores_unpacked_parent() {
   const PATH: &str = "/nix/store/dddddddddddddddddddddddddddddddd-download";
   let mut engine = Engine::new(EngineConfig::default());
   for record in [
@@ -264,7 +264,8 @@ fn descendant_progress_does_not_overwrite_its_transfer_parent() {
     .values()
     .next()
     .unwrap();
-  assert_eq!(transfer.total_bytes, Some(1_073_741_824));
+  assert_eq!(transfer.bytes_transferred, 0);
+  assert_eq!(transfer.total_bytes, None);
 
   engine
     .process_record_at(
@@ -279,12 +280,12 @@ fn descendant_progress_does_not_overwrite_its_transfer_parent() {
     .values()
     .next()
     .unwrap();
-  assert_eq!(transfer.bytes_transferred, 197_132_288);
-  assert_eq!(transfer.total_bytes, Some(1_073_741_824));
+  assert_eq!(transfer.bytes_transferred, 58_720_256);
+  assert_eq!(transfer.total_bytes, Some(327_155_712));
 }
 
 #[test]
-fn child_file_transfer_progress_populates_transfer_without_direct_progress() {
+fn child_file_transfer_progress_is_not_overwritten_by_unpacked_copy_path() {
   const PATH: &str = "/nix/store/eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee-download";
   let mut engine = Engine::new(EngineConfig::default());
   for record in [
@@ -315,8 +316,7 @@ fn child_file_transfer_progress_populates_transfer_without_direct_progress() {
   assert_eq!(transfer.total_bytes, Some(2_097_152));
   assert_eq!(transfer.protocol.as_deref(), Some("https"));
 
-  // Once the parent reports direct progress, it takes precedence over the
-  // child FileTransfer activity.
+  // Unpacked CopyPath progress must not overwrite FileTransfer wire progress.
   engine
     .process_record_at(
       br#"@nix {"action":"result","id":21,"type":105,"fields":[1000000,4000000,1,0]}"#,
@@ -336,8 +336,8 @@ fn child_file_transfer_progress_populates_transfer_without_direct_progress() {
     .values()
     .next()
     .unwrap();
-  assert_eq!(transfer.bytes_transferred, 1_000_000);
-  assert_eq!(transfer.total_bytes, Some(4_000_000));
+  assert_eq!(transfer.bytes_transferred, 900_000);
+  assert_eq!(transfer.total_bytes, Some(2_097_152));
 }
 
 #[test]

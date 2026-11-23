@@ -380,7 +380,6 @@ pub struct State {
   derivation_ids:     HashMap<Derivation, DerivationId>,
   name_counts:        HashMap<String, usize>,
   activities:         HashMap<ActivityId, ActivityStatus>,
-  direct_transfers:   HashSet<StorePathId>,
   source_fetches:     BTreeMap<ActivityId, SourceFetch>,
   nix_errors:         Vec<String>,
   nix_error_count:    usize,
@@ -411,7 +410,6 @@ impl State {
       derivation_ids:     HashMap::new(),
       name_counts:        HashMap::new(),
       activities:         HashMap::new(),
-      direct_transfers:   HashSet::new(),
       source_fetches:     BTreeMap::new(),
       nix_errors:         Vec::new(),
       nix_error_count:    0,
@@ -1195,11 +1193,18 @@ impl State {
   pub(crate) fn start_download(
     &mut self,
     path: StorePath,
-    transfer: TransferInfo,
+    mut transfer: TransferInfo,
   ) -> StorePathId {
     let id = self.get_or_create_store_path_id(path);
     self.full_summary.planned_downloads.remove(&id);
-    self.direct_transfers.remove(&id);
+    if let Some(existing) = self.full_summary.running_downloads.get(&id) {
+      transfer.start = existing.start;
+      transfer.protocol =
+        transfer.protocol.or_else(|| existing.protocol.clone());
+      transfer.bytes_transferred = existing.bytes_transferred;
+      transfer.total_bytes = existing.total_bytes;
+      transfer.last_progress = existing.last_progress;
+    }
     self.full_summary.running_downloads.insert(id, transfer);
     id
   }
@@ -1211,7 +1216,6 @@ impl State {
   ) -> StorePathId {
     let id = self.get_or_create_store_path_id(path);
     self.full_summary.planned_downloads.remove(&id);
-    self.direct_transfers.remove(&id);
     self.full_summary.running_uploads.insert(id, transfer);
     id
   }
@@ -1225,7 +1229,6 @@ impl State {
     else {
       return false;
     };
-    self.direct_transfers.remove(&path);
     self
       .full_summary
       .completed_downloads
@@ -1244,7 +1247,6 @@ impl State {
     let Some(transfer) = self.full_summary.running_uploads.remove(&path) else {
       return false;
     };
-    self.direct_transfers.remove(&path);
     self
       .full_summary
       .completed_uploads
@@ -1450,46 +1452,23 @@ impl State {
     progress: Progress,
     now: f64,
   ) -> bool {
-    let Some(status) = self.activities.get(&id) else {
+    let Some(activity) = self.activities.get(&id).map(|status| status.activity)
+    else {
       return false;
     };
-    if matches!(status.activity, Activities::Builds | Activities::CopyPaths) {
+    if matches!(activity, Activities::Builds | Activities::CopyPaths) {
       return false;
     }
     let Progress { done, expected, .. } = progress;
 
-    let mut matched_direct = false;
-    for (&path, transfer) in self
-      .full_summary
-      .running_downloads
-      .iter_mut()
-      .chain(self.full_summary.running_uploads.iter_mut())
-      .filter(|(_, transfer)| transfer.activity_id == id)
-    {
-      matched_direct = true;
-      self.direct_transfers.insert(path);
-      if transfer.bytes_transferred != done {
-        transfer.last_progress = now;
-      }
-      transfer.bytes_transferred = done;
-      transfer.total_bytes = (expected > 0).then_some(expected);
-    }
-    if matched_direct {
-      return true;
-    }
-
-    // Fall back to updating an enclosing transfer (e.g. a CopyPath/Substitute
-    // whose child FileTransfer emits byte progress) only when the parent has
-    // not reported its own progress directly.
-    if let Some(path) = self.enclosing_transfer_path(id)
-      && !self.direct_transfers.contains(&path)
-    {
-      let transfer = self
-        .full_summary
-        .running_downloads
-        .get_mut(&path)
-        .or_else(|| self.full_summary.running_uploads.get_mut(&path));
-      if let Some(transfer) = transfer {
+    // Downloads only track actual wire bytes from FileTransfer activities;
+    // CopyPath / Substitute progress reports unpacked NAR sizes and must not be
+    // counted as download size.
+    if activity == Activities::FileTransfer {
+      if let Some(path) = self.enclosing_transfer_path(id)
+        && let Some(transfer) =
+          self.full_summary.running_downloads.get_mut(&path)
+      {
         if transfer.bytes_transferred != done {
           transfer.last_progress = now;
         }
@@ -1501,8 +1480,32 @@ impl State {
               .map_or(expected, |prev| prev.max(expected)),
           );
         }
-        return true;
       }
+      return true;
+    }
+
+    // Refresh stall tracking for downloads that only emit unpacked progress,
+    // without recording unpacked sizes.
+    if done > 0
+      && let Some(path) = self.enclosing_transfer_path(id)
+      && let Some(transfer) = self.full_summary.running_downloads.get_mut(&path)
+      && transfer.total_bytes.is_none()
+      && transfer.bytes_transferred == 0
+    {
+      transfer.last_progress = now;
+    }
+
+    for transfer in self
+      .full_summary
+      .running_uploads
+      .values_mut()
+      .filter(|transfer| transfer.activity_id == id)
+    {
+      if transfer.bytes_transferred != done {
+        transfer.last_progress = now;
+      }
+      transfer.bytes_transferred = done;
+      transfer.total_bytes = (expected > 0).then_some(expected);
     }
     true
   }

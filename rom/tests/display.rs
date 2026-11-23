@@ -436,13 +436,17 @@ fn nom_legend_sorts_and_caps_hosts_into_other() {
   for record in [
     r#"@nix {"action":"start","id":1,"level":3,"parent":0,"text":"building","type":105,"fields":["/nix/store/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-app.drv","",1,1]}"#,
     r#"@nix {"action":"start","id":10,"level":3,"parent":0,"text":"copying","type":108,"fields":["/nix/store/bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb-s1","https://small.example"]}"#,
-    r#"@nix {"action":"result","id":10,"type":105,"fields":[524288,1048576,1,0]}"#,
+    r#"@nix {"action":"start","id":110,"level":3,"parent":10,"text":"downloading","type":101,"fields":[]}"#,
+    r#"@nix {"action":"result","id":110,"type":105,"fields":[524288,1048576,1,0]}"#,
     r#"@nix {"action":"start","id":11,"level":3,"parent":0,"text":"copying","type":108,"fields":["/nix/store/cccccccccccccccccccccccccccccccc-s2","https://small.example"]}"#,
-    r#"@nix {"action":"result","id":11,"type":105,"fields":[524288,1048576,1,0]}"#,
+    r#"@nix {"action":"start","id":111,"level":3,"parent":11,"text":"downloading","type":101,"fields":[]}"#,
+    r#"@nix {"action":"result","id":111,"type":105,"fields":[524288,1048576,1,0]}"#,
     r#"@nix {"action":"start","id":12,"level":3,"parent":0,"text":"copying","type":108,"fields":["/nix/store/dddddddddddddddddddddddddddddddd-m1","https://medium.example"]}"#,
-    r#"@nix {"action":"result","id":12,"type":105,"fields":[2097152,10485760,1,0]}"#,
+    r#"@nix {"action":"start","id":112,"level":3,"parent":12,"text":"downloading","type":101,"fields":[]}"#,
+    r#"@nix {"action":"result","id":112,"type":105,"fields":[2097152,10485760,1,0]}"#,
     r#"@nix {"action":"start","id":13,"level":3,"parent":0,"text":"copying","type":108,"fields":["/nix/store/eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee-l1","https://large.example"]}"#,
-    r#"@nix {"action":"result","id":13,"type":105,"fields":[10485760,104857600,1,0]}"#,
+    r#"@nix {"action":"start","id":113,"level":3,"parent":13,"text":"downloading","type":101,"fields":[]}"#,
+    r#"@nix {"action":"result","id":113,"type":105,"fields":[10485760,104857600,1,0]}"#,
   ] {
     engine.process_record_at(record.as_bytes(), 0.0).unwrap();
   }
@@ -507,7 +511,8 @@ fn progress_bars_percentages_and_decimal_bytes_toggle_independently() {
   let mut engine = Engine::new(EngineConfig::default());
   for record in [
     r#"@nix {"action":"start","id":10,"level":3,"parent":0,"text":"copying","type":108,"fields":["/nix/store/bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb-pkg","https://cache.nixos.org"]}"#,
-    r#"@nix {"action":"result","id":10,"type":105,"fields":[15728640,62914560,1,0]}"#,
+    r#"@nix {"action":"start","id":11,"level":3,"parent":10,"text":"downloading","type":101,"fields":[]}"#,
+    r#"@nix {"action":"result","id":11,"type":105,"fields":[15728640,62914560,1,0]}"#,
   ] {
     engine.process_record_at(record.as_bytes(), 0.0).unwrap();
   }
@@ -573,4 +578,46 @@ fn progress_bars_percentages_and_decimal_bytes_toggle_independently() {
     plain_numbers.contains("15.0 MiB/60.0 MiB"),
     "{plain_numbers}"
   );
+}
+
+#[test]
+fn unpacked_only_download_is_not_counted_and_shows_unknown_size() {
+  let mut engine = Engine::new(EngineConfig::default());
+  for record in [
+    // Host 1: only unpacked CopyPath progress (must NOT be counted).
+    r#"@nix {"action":"start","id":10,"level":3,"parent":0,"text":"copying","type":108,"fields":["/nix/store/bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb-unpacked-only","https://cache.nixos.org"]}"#,
+    r#"@nix {"action":"result","id":10,"type":105,"fields":[104857600,209715200,1,0]}"#,
+    // Host 2: real FileTransfer wire progress (10 MiB / 50 MiB).
+    r#"@nix {"action":"start","id":20,"level":3,"parent":0,"text":"copying","type":108,"fields":["/nix/store/cccccccccccccccccccccccccccccccc-wire-sized","https://nix-community.cachix.org"]}"#,
+    r#"@nix {"action":"start","id":21,"level":3,"parent":20,"text":"downloading","type":101,"fields":[]}"#,
+    r#"@nix {"action":"result","id":21,"type":105,"fields":[10485760,52428800,1,0]}"#,
+  ] {
+    engine.process_record_at(record.as_bytes(), 0.0).unwrap();
+  }
+
+  let text = render_frame(
+    engine.state(),
+    &RenderConfig {
+      legend_style: LegendStyle::Nom,
+      icons: IconMode::Unicode,
+      progress_bars: false,
+      show_percentages: false,
+      decimal_bytes: true,
+      ..RenderConfig::default()
+    },
+    2.0,
+    120,
+    25,
+    false,
+  )
+  .text();
+
+  assert!(text.contains("? MiB/? MiB"), "{text}");
+  assert!(!text.contains("200.0 MiB"), "{text}");
+  assert!(!text.contains("100.0 MiB"), "{text}");
+  let totals = text
+    .lines()
+    .find(|line| line.starts_with("┗━ ∑"))
+    .expect("missing nom totals row");
+  assert!(totals.contains("10.0 MiB/50.0 MiB"), "{totals}");
 }
